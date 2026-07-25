@@ -23,10 +23,94 @@ from portal.errors import AuthError, ConfigurationError
 FORWARDED_TOKEN_HEADER = "x-forwarded-access-token"
 FORWARDED_EMAIL_HEADER = "x-forwarded-email"
 
-# Required in app.yaml. Without `sql` the OBO token cannot execute statements and
-# the SDK silently falls back to the service principal — the exact failure mode
-# `assert_obo_configured` exists to make loud.
+# Without `sql` the forwarded token cannot execute statements: the API answers
+# 403 "Invalid scope, required scopes: sql", which the SDK surfaces as an
+# unparseable PermissionDenied. `assert_obo_configured` checks the token's own
+# scope claim so that failure is reported at startup, in plain language.
 REQUIRED_USER_API_SCOPES = ("sql", "iam.current-user:read")
+SQL_SCOPE = "sql"
+
+# The scope set Databricks grants when an app declares no scopes at all. Seeing
+# exactly this in a token is the signature of scopes never having been applied.
+DEFAULT_FALLBACK_SCOPES = frozenset({"iam.access-control:read", "iam.current-user:read"})
+
+
+def scopes_from_token(token: str | None) -> frozenset[str] | None:
+    """Read the `scope` claim from a JWT access token.
+
+    Returns `None` when the scopes cannot be determined (opaque token, unexpected
+    shape) so callers can proceed rather than block on a parsing detail.
+
+    The signature is deliberately not verified: the platform issued this token to
+    us over a trusted channel, and the goal is a readable diagnostic, not an
+    authorization decision. The token itself is never logged or returned.
+    """
+    if not token or token.count(".") != 2:
+        return None
+
+    import base64
+    import json
+
+    try:
+        payload_segment = token.split(".")[1]
+        padding = "=" * (-len(payload_segment) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_segment + padding))
+    except Exception:  # noqa: BLE001 - undeterminable, not fatal
+        return None
+
+    raw = payload.get("scope") or payload.get("scopes")
+    # An absent or empty claim is undeterminable, not "no scopes": blocking
+    # startup on a token shape we do not recognise would be worse than trying.
+    if not raw:
+        return None
+    if isinstance(raw, str):
+        parsed = frozenset(s for s in raw.split() if s)
+        return parsed or None
+    if isinstance(raw, (list, tuple)):
+        parsed = frozenset(str(s) for s in raw if str(s))
+        return parsed or None
+    return None
+
+
+def assert_sql_scope(token: str | None) -> None:
+    """Fail loudly when the forwarded token lacks the `sql` scope.
+
+    Without this the app starts, lists queries, and then fails on every
+    execution with an opaque 403 — which is exactly what happened in the first
+    deployment. Checking here names the cause and the fix.
+    """
+    scopes = scopes_from_token(token)
+    if scopes is None or SQL_SCOPE in scopes:
+        return
+
+    present = ", ".join(sorted(scopes)) or "(nenhum)"
+    only_defaults = scopes and set(scopes) <= set(DEFAULT_FALLBACK_SCOPES)
+    diagnosis = (
+        "O token contém apenas os escopos padrão, ou seja, nenhum escopo foi "
+        "aplicado ao app.\n"
+        if only_defaults
+        else ""
+    )
+
+    raise ConfigurationError(
+        technical=(
+            f"O token do usuário não possui o escopo '{SQL_SCOPE}'.\n"
+            f"Escopos presentes: {present}\n"
+            f"{diagnosis}\n"
+            "Como corrigir (a ordem importa):\n"
+            "1. Um admin do workspace precisa habilitar 'User authorization' "
+            "(Public Preview) e permitir o escopo 'sql' em "
+            "Settings > Development > Apps > 'Restrict OAuth scopes for apps'.\n"
+            "2. Reinicie o app: só é possível adicionar escopos depois disso.\n"
+            "3. Edite o app na UI: aba 'Authorization' > User authorization > "
+            "'+ Add scope' > 'sql'. Declarar user_api_scopes no app.yaml não "
+            "substitui esse passo.\n"
+            "4. Faça deploy/restart novamente e reabra o app: o Databricks vai "
+            "pedir um novo consentimento para o escopo adicionado.\n"
+            "Recusando iniciar: sem o escopo 'sql', toda consulta falharia com "
+            "403 'Invalid scope'."
+        )
+    )
 
 
 class Identity(Protocol):
@@ -57,6 +141,8 @@ class AppIdentity:
         host: str | None = None,
     ):
         assert_obo_configured(forwarded_token)
+        # A present token is not enough: it must carry the `sql` scope.
+        assert_sql_scope(forwarded_token)
         self._token = forwarded_token or ""
         self._email = (user_email or "").strip()
         self._host = host or os.environ.get("DATABRICKS_HOST", "")
@@ -65,7 +151,16 @@ class AppIdentity:
     def user_client(self) -> WorkspaceClient:
         # A fresh client per request: the forwarded token is per-request and
         # must never be cached across users.
-        return WorkspaceClient(host=self._host, token=self._token, auth_type="pat")
+        #
+        # The app runtime also exports DATABRICKS_CLIENT_ID/SECRET for the
+        # service principal. The SDK's Config picks those up from the
+        # environment even when a token is passed explicitly, so `auth_type` is
+        # pinned to "pat" and then verified below: if the SDK ever resolved to
+        # the OAuth client-credentials strategy instead, every published query
+        # would silently run as the service principal.
+        client = WorkspaceClient(host=self._host, token=self._token, auth_type="pat")
+        _assert_authenticating_as_user(client)
+        return client
 
     def service_principal_client(self) -> WorkspaceClient:
         if self._sp is None:
@@ -112,6 +207,25 @@ class CliIdentity:
             me = self._resolve().current_user.me()
             self._email = me.user_name or ""
         return self._email
+
+
+def _assert_authenticating_as_user(client: WorkspaceClient) -> None:
+    """Guarantee the client carries the forwarded token, not the app's identity.
+
+    This protects the single invariant the whole design rests on: Unity Catalog
+    can only be the authorization boundary if queries actually run as the user.
+    A client that fell back to the service principal would still work — which is
+    exactly what makes the failure dangerous.
+    """
+    auth_type = getattr(getattr(client, "config", None), "auth_type", None)
+    if auth_type != "pat":
+        raise ConfigurationError(
+            technical=(
+                f"O cliente do usuário resolveu auth_type={auth_type!r} em vez de 'pat'. "
+                "As consultas seriam executadas como o service principal do app, "
+                "ignorando as permissões do usuário no Unity Catalog. Execução bloqueada."
+            )
+        )
 
 
 def identity_from_headers(headers: Any) -> AppIdentity:

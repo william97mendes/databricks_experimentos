@@ -26,7 +26,12 @@ from databricks.sdk.service.sql import (
 )
 
 from portal.config import Settings
-from portal.errors import ExecutionTimeout, PortalError, message_for_status
+from portal.errors import (
+    ExecutionTimeout,
+    PortalError,
+    WarehouseUnavailable,
+    message_for_status,
+)
 
 INITIAL_WAIT_TIMEOUT = "10s"
 _TERMINAL_FAILURES = {StatementState.FAILED, StatementState.CLOSED}
@@ -173,17 +178,36 @@ def _poll(
     poll_interval: float,
     started: float,
 ) -> Any:
-    """Poll until terminal, cancelling once `timeout_seconds` is exceeded."""
+    """Poll until terminal, cancelling once `timeout_seconds` is exceeded.
+
+    Tracks whether the statement was ever observed RUNNING. A statement that
+    timed out while still PENDING never reached the warehouse — it was queued or
+    waiting for a cold start — and that is a different problem for the user than
+    a query that ran too long.
+    """
+    saw_running = False
+    polls = 0
+
     while _state(response) in (StatementState.PENDING, StatementState.RUNNING):
-        if time.monotonic() - started >= timeout_seconds:
+        if _state(response) == StatementState.RUNNING:
+            saw_running = True
+
+        elapsed = time.monotonic() - started
+        if elapsed >= timeout_seconds:
             _cancel(user_client, statement_id)
-            raise ExecutionTimeout(
-                technical=(
-                    f"statement {statement_id} exceeded timeout_seconds={timeout_seconds}"
-                )
+            technical = (
+                f"statement {statement_id} exceeded timeout_seconds={timeout_seconds} "
+                f"after {elapsed:.1f}s and {polls} polls; "
+                f"last state={_state(response)}, reached_running={saw_running}"
             )
+            if not saw_running:
+                raise WarehouseUnavailable(technical=technical)
+            raise ExecutionTimeout(technical=technical)
+
         time.sleep(poll_interval)
         response = user_client.statement_execution.get_statement(statement_id)
+        polls += 1
+
     return response
 
 

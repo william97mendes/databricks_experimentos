@@ -58,11 +58,23 @@ user_api_scopes:
   - iam.current-user:read
 ```
 
-Sem o escopo `sql`, o token do usuário não consegue executar instruções e o SDK
-volta silenciosamente para o service principal — ou seja, todo mundo passaria a
-consultar com os privilégios do app. Como essa falha é silenciosa e grave, o app
-**se recusa a iniciar** quando o token repassado não chega
-([`portal/auth.py`](apps/query_portal/portal/auth.py)).
+⚠️ **Declarar isso no `app.yaml` não é suficiente.** Os escopos são concedidos ao
+app pela plataforma: um admin precisa habilitar *User authorization* e o escopo
+`sql` deve ser adicionado ao app (**Authorization → User authorization → + Add
+scope**), com reinício e novo consentimento. Sem isso o Databricks concede apenas
+o conjunto padrão (`iam.access-control:read`, `iam.current-user:read`) e **toda**
+execução falha com `403 Invalid scope, required scopes: sql`.
+
+Por isso o app **se recusa a iniciar** em duas situações, ambas verificadas em
+[`portal/auth.py`](apps/query_portal/portal/auth.py):
+
+1. o token repassado não chegou; e
+2. o token chegou, mas **sem o escopo `sql`** — nesse caso a mensagem lista os
+   escopos recebidos e os passos da correção.
+
+A segunda checagem existe porque a falha, sem ela, só aparece na primeira
+execução, como um `403` que o SDK nem consegue parsear. Veja o passo 6.5 do
+[guia de configuração](docs/setup-free-edition.md).
 
 ### `allowed_groups` **não** é segurança
 

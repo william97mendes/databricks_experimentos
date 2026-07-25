@@ -12,18 +12,33 @@ user_api_scopes:
   - iam.current-user:read
 
 env:
-  - name: PORTAL_CATALOG
-    valueFrom: portal_catalog
-  - name: PORTAL_SCHEMA
-    valueFrom: portal_schema
+  # `valueFrom` binds an app RESOURCE to an env var, and its value must be the
+  # resource KEY — not a name you invent. `sql-warehouse` is the default key the
+  # UI assigns when you attach a SQL warehouse; check yours under
+  # Compute → Apps → <app> → Resources.
+  #
+  # If the key differs, either rename the resource to `sql-warehouse` or replace
+  # these two lines with the literal id:
+  #     - name: DATABRICKS_WAREHOUSE_ID
+  #       value: "abc123def456"
+  #
+  # A bundle deploy does not depend on this at all: resources/apps/query_portal.yml
+  # sets DATABRICKS_WAREHOUSE_ID directly from ${var.warehouse_id}.
   - name: DATABRICKS_WAREHOUSE_ID
-    valueFrom: sql_warehouse
+    valueFrom: sql-warehouse
+
+  # Plain values. These are NOT resources, so they must use `value:` — an
+  # unresolvable `valueFrom` is what breaks app startup.
+  - name: PORTAL_CATALOG
+    value: workspace
+  - name: PORTAL_SCHEMA
+    value: portal
   - name: PORTAL_TIMEZONE
     value: America/Sao_Paulo
   # Account groups require the account console, which Databricks Free Edition
-  # does not provide. Set to "false" there so the list is not filtered down to
-  # nothing. This is safe: allowed_groups is UX, and UC grants still apply.
+  # does not provide, so nothing would ever match. Safe to disable: allowed_groups
+  # is UX only — Unity Catalog grants still decide what can be read.
   - name: PORTAL_GROUP_FILTERING
-    value: "true"
+    value: "false"
   - name: PORTAL_HISTORY_LIMIT
     value: "20"

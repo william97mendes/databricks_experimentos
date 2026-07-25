@@ -9,18 +9,35 @@ resources:
       # read metadata and write the audit log; the end user's forwarded token
       # uses it to run published queries.
       resources:
-        - name: sql_warehouse
+        # `sql-warehouse` is the default resource key Databricks uses, and it is
+        # what app.yaml's `valueFrom` expects. Keep the two in sync.
+        - name: sql-warehouse
           description: Warehouse used for metadata, audit and query execution.
           sql_warehouse:
             id: ${var.warehouse_id}
             permission: CAN_USE
 
-      # Bundle variables reach app.yaml through env, which reads them by name.
+      # This block overrides app.yaml on a bundle deploy, so the warehouse id is
+      # passed as a literal value rather than through the resource binding. That
+      # removes the resource-key mismatch as a possible failure mode entirely.
       config:
+        command:
+          - streamlit
+          - run
+          - app.py
+        user_api_scopes:
+          - sql
+          - iam.current-user:read
         env:
+          - name: DATABRICKS_WAREHOUSE_ID
+            value: ${var.warehouse_id}
           - name: PORTAL_CATALOG
             value: ${var.catalog}
           - name: PORTAL_SCHEMA
             value: ${var.schema}
+          - name: PORTAL_TIMEZONE
+            value: America/Sao_Paulo
           - name: PORTAL_GROUP_FILTERING
             value: ${var.group_filtering}
+          - name: PORTAL_HISTORY_LIMIT
+            value: "20"

@@ -17,20 +17,28 @@ from portal.audit import (
     finished,
     started,
 )
-from portal.auth import identity_from_headers
+from portal.auth import FORWARDED_TOKEN_HEADER, identity_from_headers
 from portal.config import ConfigError, load_settings
 from portal.errors import ExecutionTimeout, PortalError, to_user_message
 from portal.groups import GroupResolver
 from portal.metadata import MetadataRepository
 from portal.params import bind
-from portal.ui import catalog_view, history_view, param_form, result_view
+from portal.ui import catalog_view, diagnostics, history_view, param_form, result_view
 
 st.set_page_config(page_title="Portal de consultas", page_icon="📊", layout="wide")
 
 
 @st.cache_resource
 def _settings():
-    return load_settings()
+    # discover=True lets a misconfigured warehouse binding fall back to the only
+    # warehouse the app can see, which is always the case on Free Edition.
+    return load_settings(discover=True)
+
+
+def _forwarded_token(headers) -> str | None:
+    """Read the forwarded token for diagnostics only. Never rendered or logged."""
+    lowered = {str(k).lower(): v for k, v in dict(headers or {}).items()}
+    return lowered.get(FORWARDED_TOKEN_HEADER)
 
 
 def _fatal(message: str, detail: str | None = None) -> None:
@@ -56,6 +64,8 @@ def main() -> None:
     # Fails loudly when the forwarded user token is missing. Without it queries
     # would silently run as the service principal, which is the one failure this
     # app must never degrade into.
+    forwarded_token = _forwarded_token(st.context.headers)
+
     try:
         identity = identity_from_headers(st.context.headers)
     except PortalError as exc:
@@ -74,6 +84,8 @@ def main() -> None:
 
     st.title("📊 Portal de consultas")
     st.caption(f"Conectado como **{identity.user_email or 'usuário autenticado'}**")
+
+    diagnostics.render(settings, forwarded_token, identity.user_email)
 
     query = catalog_view.render(repo, settings, user_client, resolver, identity.user_email)
 
@@ -126,12 +138,12 @@ def _render_query(query, settings, repo, audit, identity, user_client) -> None:
         except PortalError as exc:
             _record_failure(audit, full, identity, bound, execution_id, started_at,
                             warehouse_id, exc)
-            st.error(exc.user_message)
+            _show_error(exc.user_message, exc, execution_id)
             return
         except Exception as exc:  # noqa: BLE001 - never leak a stack trace
             _record_failure(audit, full, identity, bound, execution_id, started_at,
                             warehouse_id, exc)
-            st.error(to_user_message(exc))
+            _show_error(to_user_message(exc), exc, execution_id)
             return
 
     audit.record(
@@ -151,6 +163,23 @@ def _render_query(query, settings, repo, audit, identity, user_client) -> None:
     )
 
     result_view.render(full, result, audit, execution_id, user_client)
+
+
+def _show_error(user_message: str, exc: BaseException, execution_id: str) -> None:
+    """Friendly copy up front, the underlying message one click away.
+
+    Business users read the first line and stop. Whoever has to fix it needs the
+    technical text — without it, every failure becomes a support ticket. This is
+    the error message, never a stack trace.
+    """
+    st.error(user_message)
+    technical = getattr(exc, "technical", None) or f"{type(exc).__name__}: {exc}"
+    with st.expander("Detalhes técnicos"):
+        st.code(str(technical))
+        st.caption(
+            f"Identificador da execução: `{execution_id}` — informe este código ao "
+            "time de dados."
+        )
 
 
 def _record_failure(
