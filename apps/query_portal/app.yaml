@@ -1,0 +1,29 @@
+command:
+  - streamlit
+  - run
+  - app.py
+
+# REQUIRED. Without `sql`, the forwarded user token has no SQL scope and every
+# published query would silently execute as the app's service principal, which
+# would bypass Unity Catalog as the authorization boundary. `portal/auth.py`
+# refuses to start if the forwarded token is missing.
+user_api_scopes:
+  - sql
+  - iam.current-user:read
+
+env:
+  - name: PORTAL_CATALOG
+    valueFrom: portal_catalog
+  - name: PORTAL_SCHEMA
+    valueFrom: portal_schema
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: sql_warehouse
+  - name: PORTAL_TIMEZONE
+    value: America/Sao_Paulo
+  # Account groups require the account console, which Databricks Free Edition
+  # does not provide. Set to "false" there so the list is not filtered down to
+  # nothing. This is safe: allowed_groups is UX, and UC grants still apply.
+  - name: PORTAL_GROUP_FILTERING
+    value: "true"
+  - name: PORTAL_HISTORY_LIMIT
+    value: "20"

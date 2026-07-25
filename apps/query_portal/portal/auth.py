@@ -12,7 +12,7 @@ not decide what a user may read. UC grants do.
 from __future__ import annotations
 
 import os
-from typing import Protocol
+from typing import Any, Protocol
 
 from databricks.sdk import WorkspaceClient
 
@@ -112,6 +112,20 @@ class CliIdentity:
             me = self._resolve().current_user.me()
             self._email = me.user_name or ""
         return self._email
+
+
+def identity_from_headers(headers: Any) -> AppIdentity:
+    """Build an `AppIdentity` from the incoming request headers.
+
+    Takes a plain mapping rather than importing Streamlit, so the auth boundary
+    stays unit-testable without a UI runtime. Header lookup is case-insensitive
+    because proxies do not agree on casing.
+    """
+    lowered = {str(k).lower(): v for k, v in dict(headers or {}).items()}
+    return AppIdentity(
+        forwarded_token=lowered.get(FORWARDED_TOKEN_HEADER),
+        user_email=lowered.get(FORWARDED_EMAIL_HEADER),
+    )
 
 
 def assert_obo_configured(forwarded_token: str | None) -> None:
