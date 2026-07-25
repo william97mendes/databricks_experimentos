@@ -151,7 +151,16 @@ class AppIdentity:
     def user_client(self) -> WorkspaceClient:
         # A fresh client per request: the forwarded token is per-request and
         # must never be cached across users.
-        return WorkspaceClient(host=self._host, token=self._token, auth_type="pat")
+        #
+        # The app runtime also exports DATABRICKS_CLIENT_ID/SECRET for the
+        # service principal. The SDK's Config picks those up from the
+        # environment even when a token is passed explicitly, so `auth_type` is
+        # pinned to "pat" and then verified below: if the SDK ever resolved to
+        # the OAuth client-credentials strategy instead, every published query
+        # would silently run as the service principal.
+        client = WorkspaceClient(host=self._host, token=self._token, auth_type="pat")
+        _assert_authenticating_as_user(client)
+        return client
 
     def service_principal_client(self) -> WorkspaceClient:
         if self._sp is None:
@@ -198,6 +207,25 @@ class CliIdentity:
             me = self._resolve().current_user.me()
             self._email = me.user_name or ""
         return self._email
+
+
+def _assert_authenticating_as_user(client: WorkspaceClient) -> None:
+    """Guarantee the client carries the forwarded token, not the app's identity.
+
+    This protects the single invariant the whole design rests on: Unity Catalog
+    can only be the authorization boundary if queries actually run as the user.
+    A client that fell back to the service principal would still work — which is
+    exactly what makes the failure dangerous.
+    """
+    auth_type = getattr(getattr(client, "config", None), "auth_type", None)
+    if auth_type != "pat":
+        raise ConfigurationError(
+            technical=(
+                f"O cliente do usuário resolveu auth_type={auth_type!r} em vez de 'pat'. "
+                "As consultas seriam executadas como o service principal do app, "
+                "ignorando as permissões do usuário no Unity Catalog. Execução bloqueada."
+            )
+        )
 
 
 def identity_from_headers(headers: Any) -> AppIdentity:

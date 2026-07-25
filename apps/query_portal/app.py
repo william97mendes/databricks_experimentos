@@ -17,13 +17,13 @@ from portal.audit import (
     finished,
     started,
 )
-from portal.auth import identity_from_headers
+from portal.auth import FORWARDED_TOKEN_HEADER, identity_from_headers
 from portal.config import ConfigError, load_settings
 from portal.errors import ExecutionTimeout, PortalError, to_user_message
 from portal.groups import GroupResolver
 from portal.metadata import MetadataRepository
 from portal.params import bind
-from portal.ui import catalog_view, history_view, param_form, result_view
+from portal.ui import catalog_view, diagnostics, history_view, param_form, result_view
 
 st.set_page_config(page_title="Portal de consultas", page_icon="📊", layout="wide")
 
@@ -33,6 +33,12 @@ def _settings():
     # discover=True lets a misconfigured warehouse binding fall back to the only
     # warehouse the app can see, which is always the case on Free Edition.
     return load_settings(discover=True)
+
+
+def _forwarded_token(headers) -> str | None:
+    """Read the forwarded token for diagnostics only. Never rendered or logged."""
+    lowered = {str(k).lower(): v for k, v in dict(headers or {}).items()}
+    return lowered.get(FORWARDED_TOKEN_HEADER)
 
 
 def _fatal(message: str, detail: str | None = None) -> None:
@@ -58,6 +64,8 @@ def main() -> None:
     # Fails loudly when the forwarded user token is missing. Without it queries
     # would silently run as the service principal, which is the one failure this
     # app must never degrade into.
+    forwarded_token = _forwarded_token(st.context.headers)
+
     try:
         identity = identity_from_headers(st.context.headers)
     except PortalError as exc:
@@ -76,6 +84,8 @@ def main() -> None:
 
     st.title("📊 Portal de consultas")
     st.caption(f"Conectado como **{identity.user_email or 'usuário autenticado'}**")
+
+    diagnostics.render(settings, forwarded_token, identity.user_email)
 
     query = catalog_view.render(repo, settings, user_client, resolver, identity.user_email)
 
