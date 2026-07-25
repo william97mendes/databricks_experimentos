@@ -128,12 +128,12 @@ def _render_query(query, settings, repo, audit, identity, user_client) -> None:
         except PortalError as exc:
             _record_failure(audit, full, identity, bound, execution_id, started_at,
                             warehouse_id, exc)
-            st.error(exc.user_message)
+            _show_error(exc.user_message, exc, execution_id)
             return
         except Exception as exc:  # noqa: BLE001 - never leak a stack trace
             _record_failure(audit, full, identity, bound, execution_id, started_at,
                             warehouse_id, exc)
-            st.error(to_user_message(exc))
+            _show_error(to_user_message(exc), exc, execution_id)
             return
 
     audit.record(
@@ -153,6 +153,23 @@ def _render_query(query, settings, repo, audit, identity, user_client) -> None:
     )
 
     result_view.render(full, result, audit, execution_id, user_client)
+
+
+def _show_error(user_message: str, exc: BaseException, execution_id: str) -> None:
+    """Friendly copy up front, the underlying message one click away.
+
+    Business users read the first line and stop. Whoever has to fix it needs the
+    technical text — without it, every failure becomes a support ticket. This is
+    the error message, never a stack trace.
+    """
+    st.error(user_message)
+    technical = getattr(exc, "technical", None) or f"{type(exc).__name__}: {exc}"
+    with st.expander("Detalhes técnicos"):
+        st.code(str(technical))
+        st.caption(
+            f"Identificador da execução: `{execution_id}` — informe este código ao "
+            "time de dados."
+        )
 
 
 def _record_failure(
