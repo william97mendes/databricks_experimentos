@@ -82,6 +82,48 @@ def select_query_parameters(settings: Settings) -> str:
     return _QUERY_PARAMETER_SELECT.format(table=qualify(settings, QUERY_PARAMETER_TABLE))
 
 
+_INSERT_EXECUTION_LOG = """
+INSERT INTO {table} (
+  execution_id, query_id, user_email, parameters, statement_id, warehouse_id,
+  status, error_message, row_count, duration_ms, downloaded_format,
+  started_at, ended_at
+)
+VALUES (
+  :execution_id, :query_id, :user_email, :parameters, :statement_id, :warehouse_id,
+  :status, :error_message, :row_count, :duration_ms, :downloaded_format,
+  :started_at, :ended_at
+)
+"""
+
+_UPDATE_DOWNLOADED_FORMAT = """
+UPDATE {table}
+SET downloaded_format = :downloaded_format
+WHERE execution_id = :execution_id
+"""
+
+# QUALIFY rather than LIMIT: parameter markers are reliably accepted in a
+# predicate, and this keeps the row cap a bound parameter instead of literal text.
+_SELECT_USER_EXECUTIONS = """
+SELECT execution_id, query_id, parameters, statement_id, status, error_message,
+       row_count, duration_ms, downloaded_format, started_at, ended_at
+FROM {table}
+WHERE user_email = :user_email
+QUALIFY row_number() OVER (ORDER BY started_at DESC) <= :row_limit
+"""
+
+
+def insert_execution_log(settings: Settings) -> str:
+    return _INSERT_EXECUTION_LOG.format(table=qualify(settings, EXECUTION_LOG_TABLE))
+
+
+def update_downloaded_format(settings: Settings) -> str:
+    return _UPDATE_DOWNLOADED_FORMAT.format(table=qualify(settings, EXECUTION_LOG_TABLE))
+
+
+def select_user_executions(settings: Settings) -> str:
+    return _SELECT_USER_EXECUTIONS.format(table=qualify(settings, EXECUTION_LOG_TABLE))
+
+
 def group_membership(count: int) -> str:
     """Statement testing membership in `count` groups in a single round trip.
 

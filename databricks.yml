@@ -1,53 +1,56 @@
-# Databricks Asset Bundle definition.
-# Docs: https://docs.databricks.com/dev-tools/bundles/index.html
+# Databricks Asset Bundle for the self-service query portal.
 #
-# Deploy:   databricks bundle deploy -t dev
-# Run:      databricks bundle run <job_key> -t dev
+#   databricks bundle validate -t dev
+#   databricks bundle deploy   -t dev
+#   databricks bundle run apply_metadata_ddl -t dev
+#
+# The bundle owns only the app, its warehouse binding, and the metadata schema
+# DDL. Nothing else in the workspace is managed here.
 bundle:
-  name: databricks_experimentos
+  name: query_portal
 
 include:
+  - resources/apps/*.yml
   - resources/jobs/*.yml
-  - resources/pipelines/*.yml
-  - resources/clusters/*.yml
-  - apps/*/app.yml
 
 variables:
   catalog:
-    description: Unity Catalog catalog used by this bundle.
-    default: main
+    description: Catalog holding the portal metadata schema.
+    default: workspace
   schema:
-    description: Default schema for the target environment.
-    default: experimentos_dev
+    description: Schema holding query_catalog, query_parameter and execution_log.
+    default: portal
   warehouse_id:
-    description: SQL warehouse used by dashboards and SQL tasks.
-    default: ""
+    description: SQL warehouse the app and the DDL job run on.
+  group_filtering:
+    description: >-
+      Filter the query list by allowed_groups. Requires account groups, which
+      Databricks Free Edition cannot create. UX only — never a security control.
+    default: "true"
 
 targets:
+  # Databricks Free Edition: one workspace, one 2X-Small warehouse, no account
+  # console, so no account groups exist and list filtering is turned off.
   dev:
     mode: development
     default: true
     workspace:
-      host: https://<your-workspace>.cloud.databricks.com
+      host: ${workspace.host}
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
     variables:
-      schema: experimentos_dev
+      catalog: workspace
+      schema: portal
+      group_filtering: "false"
 
-  staging:
+  prd:
     mode: production
     workspace:
-      host: https://<your-workspace>.cloud.databricks.com
+      host: ${workspace.host}
       root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
     variables:
-      schema: experimentos_staging
-
-  prod:
-    mode: production
-    workspace:
-      host: https://<your-workspace>.cloud.databricks.com
-      root_path: /Workspace/Shared/.bundle/${bundle.name}/${bundle.target}
-    variables:
-      schema: experimentos_prod
+      catalog: governance
+      schema: portal
+      group_filtering: "true"
     permissions:
       - level: CAN_VIEW
         group_name: users

@@ -70,12 +70,47 @@ class GroupResolver:
         self._client = user_client
         self._settings = settings
         self._cache: dict[str, bool] = {}
+        # Set when membership could not be resolved, so the UI can explain why a
+        # restricted query is missing instead of leaving the user guessing.
+        self.last_error: str | None = None
 
     def membership(self, groups: Iterable[str]) -> set[str]:
         names = [g.strip() for g in groups if g and g.strip()]
         unknown = [n for n in names if n not in self._cache]
         if unknown:
-            resolved = resolve_membership(self._client, self._settings, unknown)
+            try:
+                resolved = resolve_membership(self._client, self._settings, unknown)
+            except Exception as exc:  # noqa: BLE001 - degrade to "no membership"
+                # Fail closed: an unresolvable group hides its queries rather than
+                # revealing them. Nothing is exposed either way, because Unity
+                # Catalog still gates the data.
+                self.last_error = f"{type(exc).__name__}: {exc}"
+                resolved = set()
             for name in unknown:
                 self._cache[name] = name in resolved
         return {n for n in names if self._cache.get(n)}
+
+
+def visible_for_user(
+    user_client: WorkspaceClient,
+    settings: Settings,
+    queries: Sequence[QueryDefinition],
+    resolver: GroupResolver | None = None,
+) -> list[QueryDefinition]:
+    """Apply `allowed_groups` filtering, honouring the `group_filtering` toggle.
+
+    With filtering off (the Free Edition default path, where account groups
+    cannot exist) every query is listed. That is a UX decision, not a security
+    one: Unity Catalog grants still decide what the user can actually read.
+    """
+    from portal.metadata import visible_queries
+
+    if not settings.group_filtering:
+        return list(queries)
+
+    groups = referenced_groups(queries)
+    if not groups:
+        return list(queries)
+
+    resolver = resolver or GroupResolver(user_client, settings)
+    return visible_queries(queries, resolver.membership(groups))

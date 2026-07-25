@@ -1,0 +1,26 @@
+resources:
+  apps:
+    query_portal:
+      name: query-portal-${bundle.target}
+      description: Portal de consultas self-service.
+      source_code_path: ../../apps/query_portal
+
+      # Binds the warehouse to the app's service principal. The SP uses it to
+      # read metadata and write the audit log; the end user's forwarded token
+      # uses it to run published queries.
+      resources:
+        - name: sql_warehouse
+          description: Warehouse used for metadata, audit and query execution.
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+
+      # Bundle variables reach app.yaml through env, which reads them by name.
+      config:
+        env:
+          - name: PORTAL_CATALOG
+            value: ${var.catalog}
+          - name: PORTAL_SCHEMA
+            value: ${var.schema}
+          - name: PORTAL_GROUP_FILTERING
+            value: ${var.group_filtering}

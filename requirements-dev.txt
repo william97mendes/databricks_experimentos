@@ -1,6 +1,9 @@
 # Local development and CI. No Spark anywhere: the app and the CLI both reach the
 # warehouse through the SQL Statement Execution API.
 databricks-sdk>=0.30
+xlsxwriter>=3.2
 pytest>=8.0
 pytest-cov>=5.0
 ruff>=0.6
+# Only used to assert the generated XLSX round-trips; tests skip without it.
+openpyxl>=3.1

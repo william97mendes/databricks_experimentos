@@ -1,10 +1,15 @@
 -- Metadata schema for the self-service query portal.
--- Applied by resources/jobs/apply_metadata_ddl.yml with :catalog and :schema bound
--- as job parameters. The catalog itself is owned by Terraform; this bundle owns
--- only the schema and these three tables.
 --
--- IDENTIFIER() is used instead of string interpolation so object names bind as
--- parameters, consistent with the no-interpolation rule the app enforces.
+-- Run with :catalog and :schema bound as parameters (the bundle job does this;
+-- see docs/setup-free-edition.md to run it by hand).
+--
+-- The catalog is NOT created here: on Databricks Free Edition the `workspace`
+-- catalog already exists, and on an enterprise workspace the catalog is usually
+-- owned by whatever manages your infrastructure. Only the schema and its three
+-- tables belong to this project.
+--
+-- IDENTIFIER() binds the object names as parameters rather than interpolating
+-- them, consistent with the no-interpolation rule the app enforces in code.
 
 CREATE SCHEMA IF NOT EXISTS IDENTIFIER(:catalog || '.' || :schema)
   COMMENT 'Self-service query portal metadata and audit log.';
@@ -13,7 +18,7 @@ CREATE SCHEMA IF NOT EXISTS IDENTIFIER(:catalog || '.' || :schema)
 -- query_catalog: one row per published query. Publishing = INSERT, not deploy.
 -- --------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS IDENTIFIER(:catalog || '.' || :schema || '.query_catalog') (
-  query_id        STRING  NOT NULL COMMENT 'Stable slug, used in URLs and filenames',
+  query_id        STRING  NOT NULL COMMENT 'Stable slug, used in the UI and in filenames',
   title           STRING  NOT NULL COMMENT 'Shown in the list, Portuguese',
   description     STRING           COMMENT 'What the query answers, Portuguese',
   category        STRING           COMMENT 'Grouping in the list, e.g. Vendas',
@@ -22,18 +27,16 @@ CREATE TABLE IF NOT EXISTS IDENTIFIER(:catalog || '.' || :schema || '.query_cata
   warehouse_id    STRING           COMMENT 'Optional override of the app default warehouse',
   max_rows        INT              COMMENT 'row_limit applied on execution',
   timeout_seconds INT              COMMENT 'Statement is cancelled past this',
-  is_active       BOOLEAN NOT NULL DEFAULT true,
+  is_active       BOOLEAN NOT NULL COMMENT 'Soft delete: false hides the query',
   owner_email     STRING           COMMENT 'Who to contact about this query',
-  created_at      TIMESTAMP NOT NULL DEFAULT current_timestamp(),
-  updated_at      TIMESTAMP NOT NULL DEFAULT current_timestamp(),
-  CONSTRAINT pk_query_catalog PRIMARY KEY (query_id)
+  created_at      TIMESTAMP,
+  updated_at      TIMESTAMP
 )
 USING DELTA
-COMMENT 'Published queries. allowed_groups filters the list; UC grants enforce access.'
-TBLPROPERTIES (delta.feature.allowColumnDefaults = 'supported');
+COMMENT 'Published queries. allowed_groups filters the list; Unity Catalog grants enforce access.';
 
 -- --------------------------------------------------------------------------
--- query_parameter: widgets and typing for each query's inputs.
+-- query_parameter: widget definition and typing for each query input.
 -- --------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS IDENTIFIER(:catalog || '.' || :schema || '.query_parameter') (
   query_id        STRING  NOT NULL,
@@ -42,27 +45,27 @@ CREATE TABLE IF NOT EXISTS IDENTIFIER(:catalog || '.' || :schema || '.query_para
   help_text       STRING           COMMENT 'Widget tooltip, Portuguese',
   param_type      STRING  NOT NULL COMMENT 'DATE|DATE_RANGE|STRING|INT|DECIMAL|SELECT|MULTI_SELECT',
   sql_type        STRING           COMMENT 'Explicit statement parameter type, e.g. DATE, INT',
-  is_required     BOOLEAN NOT NULL DEFAULT false,
+  is_required     BOOLEAN NOT NULL,
   default_value   STRING           COMMENT 'Literal, or TODAY|TODAY-30D|MONTH_START|LAST_MONTH_START|LAST_MONTH_END',
   options_sql     STRING           COMMENT 'Dropdown query. Runs AS THE USER, so it cannot leak values.',
   options_static  ARRAY<STRING>    COMMENT 'Fixed dropdown options, used when options_sql is null',
   max_range_days  INT              COMMENT 'DATE_RANGE only; validated before submission',
-  display_order   INT     NOT NULL DEFAULT 0,
-  CONSTRAINT pk_query_parameter PRIMARY KEY (query_id, param_name)
+  display_order   INT     NOT NULL
 )
 USING DELTA
-COMMENT 'Parameter definitions. DATE_RANGE expands into :<name>_inicio and :<name>_fim.'
-TBLPROPERTIES (delta.feature.allowColumnDefaults = 'supported');
+COMMENT 'Parameter definitions. DATE_RANGE expands into :<name>_inicio and :<name>_fim.';
 
 -- --------------------------------------------------------------------------
 -- execution_log: audit trail and the chargeback join key.
+--
 -- statement_id joins to system.query.history for bytes scanned and warehouse
--- time, which is how cost is attributed per requesting area.
+-- time. That system schema is not available on Free Edition; the column is
+-- still populated so the join works unchanged on a paid workspace.
 -- --------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS IDENTIFIER(:catalog || '.' || :schema || '.execution_log') (
   execution_id      STRING  NOT NULL COMMENT 'UUID minted by the app',
   query_id          STRING  NOT NULL,
-  user_email        STRING  NOT NULL COMMENT 'Identity that executed, not the service principal',
+  user_email        STRING  NOT NULL COMMENT 'Identity that executed, never the service principal',
   parameters        STRING           COMMENT 'JSON of the bound parameter values',
   statement_id      STRING           COMMENT 'Join key to system.query.history',
   warehouse_id      STRING,
@@ -77,4 +80,4 @@ CREATE TABLE IF NOT EXISTS IDENTIFIER(:catalog || '.' || :schema || '.execution_
 )
 USING DELTA
 PARTITIONED BY (execution_date)
-COMMENT 'Every execution attempt. Also powers the "Minhas execuções" tab, which is the only window Consumer-access users have into their own history.';
+COMMENT 'Every execution attempt. Powers "Minhas execuções", the only window Consumer-access users have into their own history.';

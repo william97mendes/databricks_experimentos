@@ -1,0 +1,28 @@
+resources:
+  jobs:
+    apply_metadata_ddl:
+      name: "[${bundle.target}] apply_metadata_ddl"
+      description: >-
+        Creates the portal metadata schema and seeds the example queries.
+        Idempotent: safe to re-run after editing the SQL.
+
+      tasks:
+        - task_key: schema
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../../sql/ddl/001_portal_schema.sql
+            parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+
+        - task_key: seed
+          depends_on:
+            - task_key: schema
+          sql_task:
+            warehouse_id: ${var.warehouse_id}
+            file:
+              path: ../../sql/dml/001_seed_example_query.sql
+            parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
