@@ -30,7 +30,9 @@ st.set_page_config(page_title="Portal de consultas", page_icon="📊", layout="w
 
 @st.cache_resource
 def _settings():
-    return load_settings()
+    # discover=True lets a misconfigured warehouse binding fall back to the only
+    # warehouse the app can see, which is always the case on Free Edition.
+    return load_settings(discover=True)
 
 
 def _fatal(message: str, detail: str | None = None) -> None:

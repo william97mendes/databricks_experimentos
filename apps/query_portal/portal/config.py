@@ -23,6 +23,18 @@ DEFAULT_CATALOG = "workspace"
 DEFAULT_SCHEMA = "portal"
 
 
+# The warehouse id may arrive under any of these names. `valueFrom` in app.yaml
+# binds an app *resource* to an env var, and the resource key differs between a
+# bundle deploy and an app created by hand in the UI, so several spellings are
+# accepted rather than making one of them load-bearing.
+WAREHOUSE_ENV_VARS = (
+    "DATABRICKS_WAREHOUSE_ID",
+    "DATABRICKS_SQL_WAREHOUSE_ID",
+    "SQL_WAREHOUSE_ID",
+    "WAREHOUSE_ID",
+)
+
+
 class ConfigError(RuntimeError):
     """Raised when required configuration is absent or invalid."""
 
@@ -52,16 +64,6 @@ class Settings:
         return ZoneInfo(self.timezone)
 
 
-def _required(name: str) -> str:
-    value = os.environ.get(name, "").strip()
-    if not value:
-        raise ConfigError(
-            f"Environment variable {name} is not set. "
-            "In the app it comes from app.yaml; locally, export it or pass --warehouse-id."
-        )
-    return value
-
-
 def _optional(name: str, default: str) -> str:
     return os.environ.get(name, "").strip() or default
 
@@ -87,13 +89,86 @@ def _bool(name: str, default: bool) -> bool:
     raise ConfigError(f"Environment variable {name} must be a boolean, got {raw!r}")
 
 
-def load_settings(warehouse_id: str | None = None) -> Settings:
+def _warehouse_from_env() -> str | None:
+    for name in WAREHOUSE_ENV_VARS:
+        value = os.environ.get(name, "").strip()
+        if value:
+            return value
+    return None
+
+
+def _warehouse_diagnostic() -> str:
+    """Explain what was checked and what the runtime actually provided.
+
+    Listing the names present (never their values) turns "not set" from a dead
+    end into something the operator can act on in one glance.
+    """
+    checked = ", ".join(WAREHOUSE_ENV_VARS)
+    visible = sorted(
+        name
+        for name in os.environ
+        if name.startswith(("PORTAL_", "DATABRICKS_")) and "TOKEN" not in name
+    )
+    present = ", ".join(visible) if visible else "(nenhuma)"
+    return (
+        "Nenhum ID de SQL warehouse foi encontrado.\n\n"
+        f"Variáveis procuradas: {checked}\n"
+        f"Variáveis presentes no ambiente: {present}\n\n"
+        "No app, o ID vem do app.yaml. Se você usa 'valueFrom', o valor precisa ser a "
+        "CHAVE de um recurso declarado no app (o padrão é 'sql-warehouse'), e nao um "
+        "nome livre. Confira em Compute > Apps > seu app > Resources, ou troque por um "
+        "'value:' com o ID literal.\n"
+        "Fora do app, exporte DATABRICKS_WAREHOUSE_ID ou use --warehouse-id."
+    )
+
+
+def discover_warehouse(client=None) -> str | None:
+    """Last-resort fallback: use the only warehouse the caller can see.
+
+    Databricks Free Edition allows exactly one SQL warehouse, so this turns a
+    misconfigured resource binding into a working app instead of a dead end.
+    With more than one visible warehouse it declines to guess.
+    """
+    try:
+        if client is None:
+            from databricks.sdk import WorkspaceClient
+
+            client = WorkspaceClient()
+        warehouses = [w for w in client.warehouses.list() if getattr(w, "id", None)]
+    except Exception as exc:  # noqa: BLE001 - fall through to the config error
+        print(f"[config] warehouse discovery failed: {exc}")
+        return None
+
+    if len(warehouses) == 1:
+        only = warehouses[0]
+        print(
+            f"[config] no warehouse env var set; using the only visible warehouse "
+            f"{only.id} ({getattr(only, 'name', '?')})."
+        )
+        return only.id
+
+    if len(warehouses) > 1:
+        names = ", ".join(f"{w.id} ({getattr(w, 'name', '?')})" for w in warehouses[:5])
+        print(f"[config] {len(warehouses)} warehouses visible, refusing to guess: {names}")
+    return None
+
+
+def load_settings(
+    warehouse_id: str | None = None,
+    discover: bool = False,
+) -> Settings:
     """Build settings from the environment.
 
-    `warehouse_id` overrides `DATABRICKS_WAREHOUSE_ID` so the CLI can target a
-    warehouse without mutating the environment.
+    `warehouse_id` takes precedence so the CLI can target a warehouse without
+    mutating the environment. `discover=True` enables the single-warehouse
+    fallback, which the app turns on and the CLI does not.
     """
-    resolved_warehouse = (warehouse_id or "").strip() or _required("DATABRICKS_WAREHOUSE_ID")
+    resolved_warehouse = (warehouse_id or "").strip() or _warehouse_from_env()
+    if not resolved_warehouse and discover:
+        resolved_warehouse = discover_warehouse()
+    if not resolved_warehouse:
+        raise ConfigError(_warehouse_diagnostic())
+
     timezone = _optional("PORTAL_TIMEZONE", DEFAULT_TIMEZONE)
     try:
         ZoneInfo(timezone)
