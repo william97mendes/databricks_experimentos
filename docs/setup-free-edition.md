@@ -180,6 +180,38 @@ python -m portal.cli --query-id corridas_por_cep --max-print 10
 
 ---
 
+## 6.5 Habilitar o escopo `sql` (passo obrigatório e fácil de esquecer)
+
+⚠️ **Declarar `user_api_scopes` no `app.yaml` NÃO é suficiente.** Os escopos são
+concedidos ao app pela plataforma. Se nenhum for aplicado, o Databricks concede
+apenas o conjunto padrão — `iam.access-control:read` e `iam.current-user:read` —
+e **toda** execução falha com `403 Invalid scope, required scopes: sql`.
+
+A ordem importa:
+
+1. **Admin do workspace libera o escopo.** Clique no seu usuário →
+   **Settings** → **Development** → seção **Apps** → **Restrict OAuth scopes for
+   apps to selected values**. Deixe em **All APIs** (ou inclua `sql`).
+   **None desativa** a autorização de usuário por completo. Recarregue a página.
+2. **Reinicie o app.** Só é possível adicionar escopos a um app depois de
+   reiniciá-lo — apps em execução continuam com os escopos antigos.
+3. **Adicione o escopo.** No app → aba **Authorization** → **User authorization**
+   → **+ Add scope** → selecione **`sql`**.
+4. **Faça deploy/restart de novo e reabra o app.** O Databricks vai pedir um
+   **novo consentimento** para o escopo adicionado. Aceite.
+
+> A autorização de usuário está em **Public Preview**. Se a seção não aparecer
+> nas Settings, ela não está disponível para a sua conta — e o modelo de duas
+> identidades não pode funcionar sem ela.
+>
+> Uma vez concedido, **o consentimento não pode ser revogado pelo usuário**.
+
+✅ **Confira:** abra o app. A partir da versão atual, se o escopo `sql` não
+estiver presente o app **se recusa a iniciar** e mostra exatamente quais escopos
+chegaram e o que fazer — em vez de falhar só na hora de executar a consulta.
+
+---
+
 ## 7. Conceder permissões (o passo que realmente importa)
 
 São **duas identidades** com necessidades opostas.
@@ -264,6 +296,8 @@ ORDER BY started_at DESC LIMIT 10;
 | Sintoma | Causa provável | Correção |
 |---|---|---|
 | **“Nenhum ID de SQL warehouse foi encontrado”** | `valueFrom` aponta para uma chave de recurso que não existe | Veja o aviso do passo 6. A mensagem de erro lista as variáveis procuradas e as presentes — compare com a chave em **Apps → Resources**. Solução mais rápida: trocar por `value:` com o ID literal. |
+| **`403 Invalid scope, required scopes: sql`** ou “O token do usuário não possui o escopo 'sql'” | O escopo `sql` não foi aplicado ao app; ele recebeu só os escopos padrão | **Passo 6.5.** `user_api_scopes` no `app.yaml` não basta: é preciso liberar o escopo nas Settings, reiniciar o app, adicioná-lo em **Authorization → User authorization → + Add scope** e reconsentir. |
+| `PermissionDenied: unable to parse response` | Normalmente é o caso acima: o SDK não consegue parsear o corpo do 403 | Confira os escopos do app antes de investigar grants de UC |
 | App para com “não está configurado para executar consultas em nome do usuário” | Falta `user_api_scopes` | Confirme os dois escopos em `app.yaml` e refaça o deploy. **É proposital**: o app se recusa a rodar como service principal. |
 | Lista vazia | SP sem `SELECT` nos metadados | Refaça o passo 7.1 |
 | “Você não tem acesso a esta consulta” | Falta grant de UC na tabela de dados | Passo 7.2 — o `allowed_groups` não substitui isso |

@@ -24,6 +24,12 @@ MSG_WAREHOUSE_UNAVAILABLE = (
 MSG_INTERNAL = (
     "Erro interno do portal. Avise o time de dados e informe o identificador da execução."
 )
+# Deployment problem, not a data-permission problem: the distinction matters
+# because "solicite acesso aos dados" would send the user to the wrong team.
+MSG_MISSING_SCOPE = (
+    "O portal não está autorizado a executar consultas em seu nome. "
+    "Isso é uma configuração do aplicativo — avise o time de dados."
+)
 MSG_CANCELLED = "A execução foi cancelada."
 MSG_OBJECT_NOT_FOUND = (
     "A tabela usada por esta consulta não está disponível. Avise o time de dados."
@@ -75,11 +81,20 @@ class PermissionDenied(PortalError):
 
 
 _PERMISSION_PATTERNS = (
-    "permission_denied",
+    r"permission[_ ]?denied",
     "does not have",
     "insufficient privileges",
     "access denied",
     "requires .* privilege",
+)
+
+# The app is missing an OAuth scope, which is a deployment problem rather than a
+# data-access one. It arrives as 403 "Invalid scope, required scopes: sql", and
+# the SDK often cannot parse that body, so match the text directly.
+_SCOPE_PATTERNS = (
+    "invalid scope",
+    "required scopes",
+    "does not have required scopes",
 )
 _NOT_FOUND_PATTERNS = (
     "table_or_view_not_found",
@@ -130,6 +145,10 @@ def to_user_message(exc: BaseException) -> str:
         return MSG_INTERNAL
 
     text = f"{type(exc).__name__}: {exc}".lower()
+    # Checked before the permission patterns: a missing scope also reports as
+    # PermissionDenied, but the fix is a deployment change, not a UC grant.
+    if _matches(text, _SCOPE_PATTERNS):
+        return MSG_MISSING_SCOPE
     if _matches(text, _PERMISSION_PATTERNS):
         return MSG_PERMISSION_DENIED
     if _matches(text, _TIMEOUT_PATTERNS):
@@ -142,6 +161,8 @@ def to_user_message(exc: BaseException) -> str:
 def message_for_status(error_message: str | None) -> str:
     """Map the `status.error.message` of a FAILED statement to Portuguese copy."""
     text = (error_message or "").lower()
+    if _matches(text, _SCOPE_PATTERNS):
+        return MSG_MISSING_SCOPE
     if _matches(text, _PERMISSION_PATTERNS):
         return MSG_PERMISSION_DENIED
     if _matches(text, _TIMEOUT_PATTERNS):
