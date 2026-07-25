@@ -197,8 +197,23 @@ A ordem importa:
    reiniciá-lo — apps em execução continuam com os escopos antigos.
 3. **Adicione o escopo.** No app → aba **Authorization** → **User authorization**
    → **+ Add scope** → selecione **`sql`**.
-4. **Faça deploy/restart de novo e reabra o app.** O Databricks vai pedir um
-   **novo consentimento** para o escopo adicionado. Aceite.
+4. **PARE e inicie o app** (**Stop**, depois **Run**). Um *redeploy* não basta:
+   só o ciclo stop/start dispara o novo consentimento.
+5. **Abra o app e aceite o consentimento.** Se a tela **não** aparecer, **saia da
+   conta Databricks e limpe a sessão do navegador** (ou use uma janela anônima).
+
+### ⚠️ O consentimento fica preso ao que você aprovou primeiro
+
+Se você abriu o app **antes** de adicionar o escopo `sql`, o Databricks guardou
+aquele consentimento — e **o usuário não consegue revogá-lo**. O token continua
+sendo emitido com os escopos originais (`email`, `openid`, `profile`,
+`offline_access`, `iam.*`) mesmo com o escopo correto configurado no app.
+
+É por isso que o passo 5 (limpar a sessão) resolve a maioria dos casos.
+
+**Último recurso:** exclua e recrie o app. Recriar zera os escopos já
+consentidos. Na Free Edition **não existe console de conta**, então não há outra
+forma de limpar um consentimento antigo.
 
 > A autorização de usuário está em **Public Preview**. Se a seção não aparecer
 > nas Settings, ela não está disponível para a sua conta — e o modelo de duas
@@ -296,7 +311,8 @@ ORDER BY started_at DESC LIMIT 10;
 | Sintoma | Causa provável | Correção |
 |---|---|---|
 | **“Nenhum ID de SQL warehouse foi encontrado”** | `valueFrom` aponta para uma chave de recurso que não existe | Veja o aviso do passo 6. A mensagem de erro lista as variáveis procuradas e as presentes — compare com a chave em **Apps → Resources**. Solução mais rápida: trocar por `value:` com o ID literal. |
-| **`403 Invalid scope, required scopes: sql`** ou “O token do usuário não possui o escopo 'sql'” | O escopo `sql` não foi aplicado ao app; ele recebeu só os escopos padrão | **Passo 6.5.** `user_api_scopes` no `app.yaml` não basta: é preciso liberar o escopo nas Settings, reiniciar o app, adicioná-lo em **Authorization → User authorization → + Add scope** e reconsentir. |
+| **`403 Invalid scope, required scopes: sql`** ou “O token do usuário não possui o escopo 'sql'” | O escopo `sql` não foi aplicado ao app; ele recebeu só os escopos padrão | **Passo 6.5.** `user_api_scopes` no `app.yaml` não basta: libere o escopo nas Settings, adicione em **Authorization → User authorization → + Add scope**, **pare e inicie** o app e reconsinta. |
+| O escopo **já está** configurado no app, mas o token continua sem `sql` | Consentimento antigo, concedido antes do escopo existir — e o usuário não pode revogá-lo | **Stop + Run** (não basta redeploy), depois **sair da conta e limpar a sessão do navegador** / janela anônima. Se persistir, **exclua e recrie o app**. |
 | `PermissionDenied: unable to parse response` | Normalmente é o caso acima: o SDK não consegue parsear o corpo do 403 | Confira os escopos do app antes de investigar grants de UC |
 | App para com “não está configurado para executar consultas em nome do usuário” | Falta `user_api_scopes` | Confirme os dois escopos em `app.yaml` e refaça o deploy. **É proposital**: o app se recusa a rodar como service principal. |
 | Lista vazia | SP sem `SELECT` nos metadados | Refaça o passo 7.1 |
