@@ -1,0 +1,18 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The app's modules live inside its source directory: Databricks Apps only ship
+# files under app source root, so there is no shared src/ package to install.
+pythonpath = ["apps/query_portal", "."]
+markers = [
+    "integration: requires a live Databricks workspace and warehouse",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"notebooks/**" = ["F821", "E402"]
